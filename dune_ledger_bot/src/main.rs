@@ -1,5 +1,6 @@
 mod commands;
 use commands::submit::submit;
+use commands::request::request;
 
 use std::env;
 use dotenvy::dotenv;
@@ -23,13 +24,13 @@ async fn main() {
     dotenv().ok();
     //  Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-
     let intents = serenity::GatewayIntents::non_privileged();
 
     let options = poise::FrameworkOptions {
         commands: vec![
             ping(),
             submit(),
+            request(),
             ],
         ..Default::default()
     };
@@ -38,7 +39,11 @@ async fn main() {
     .options(options)
     .setup(|ctx, _ready, framework| {
         Box::pin(async move {
-            poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+            let http = ctx.http.clone(); // ensure `http` is in scope
+            let guild_id: u64 = std::env::var("GUILD_ID")?.parse()?;
+            let guild = serenity::model::id::GuildId::new(guild_id);
+            poise::builtins::register_in_guild(&http, &framework.options().commands, guild).await?;
+            // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
             Ok(Data {})
         })
     })
