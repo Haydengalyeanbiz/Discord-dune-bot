@@ -1,4 +1,5 @@
 mod commands;
+use commands::submit::submit;
 
 use std::env;
 use dotenvy::dotenv;
@@ -26,7 +27,10 @@ async fn main() {
     let intents = serenity::GatewayIntents::non_privileged();
 
     let options = poise::FrameworkOptions {
-        commands: vec![ping()],
+        commands: vec![
+            ping(),
+            submit(),
+            ],
         ..Default::default()
     };
     // Set gateway intents, which decides what events the bot will be notified about
