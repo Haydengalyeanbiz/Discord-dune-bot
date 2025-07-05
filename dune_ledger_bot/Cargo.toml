@@ -11,7 +11,9 @@ serenity = { version = "0.12", features = [
   "standard_framework",
   "rustls_backend",
   "builder",
-  "model"
+  "model", 
+  "http"
 ] }
+poise = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 dotenvy = "0.15"

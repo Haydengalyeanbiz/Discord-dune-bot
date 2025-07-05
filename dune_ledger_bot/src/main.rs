@@ -1,39 +1,47 @@
+mod commands;
+
 use std::env;
 use dotenvy::dotenv;
 
-use serenity::async_trait;
-use serenity::model::channel::Message;
-use serenity::prelude::*;
+use poise::{serenity_prelude as serenity};
 
-struct Handler;
+struct Data {}
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn message(&self, ctx: Context, msg: Message) {
-        if msg.content == "!ping" {
-            if let Err(why) = msg.channel_id.say(&ctx.http, "Pong!").await {
-                println!("Error sending message: {why:?}");
-            }
-        }
-    }
-}
+type Error = Box<dyn std::error::Error + Send + Sync>;
+type Context<'a> = poise::Context<'a, Data, Error>;
+
+#[poise::command(slash_command)]
+async fn ping(ctx: Context<'_>) -> Result<(), Error>{
+    ctx.say("Pong!").await?;
+    Ok(())
+} 
+
 
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-    // Login with a bot token from the environment
+    //  Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
+
+    let intents = serenity::GatewayIntents::non_privileged();
+
+    let options = poise::FrameworkOptions {
+        commands: vec![ping()],
+        ..Default::default()
+    };
     // Set gateway intents, which decides what events the bot will be notified about
-    let intents = GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
+    let framework = poise::Framework::builder()
+    .options(options)
+    .setup(|ctx, _ready, framework| {
+        Box::pin(async move {
+            poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+            Ok(Data {})
+        })
+    })
+    .build();
 
-    // Create a new instance of the Client, logging in as a bot.
-    let mut client =
-        Client::builder(&token, intents).event_handler(Handler).await.expect("Err creating client");
-
-    // Start listening for events by starting a single shard
-    if let Err(why) = client.start().await {
-        println!("Client error: {why:?}");
-    }
+let client = serenity::ClientBuilder::new(token, intents)
+    .framework(framework)
+    .await;
+client.unwrap().start().await.unwrap();
 }
