@@ -1,5 +1,6 @@
 mod commands;
 use commands::submit::submit;
+use commands::request::request;
 
 use std::env;
 use dotenvy::dotenv;
@@ -23,13 +24,13 @@ async fn main() {
     dotenv().ok();
     //  Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
-
     let intents = serenity::GatewayIntents::non_privileged();
 
     let options = poise::FrameworkOptions {
         commands: vec![
             ping(),
             submit(),
+            request(),
             ],
         ..Default::default()
     };
