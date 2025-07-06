@@ -7,6 +7,7 @@ pub async fn submit(
     #[description = "Resource to submit"] resource: String,
     #[description = "Amount to submit"] amount: i32,
 ) -> Result<(), Error> {
-    ctx.say(format!("Pong! you submitted {} of {}", amount, resource)).await?;
+    ctx.say(format!("Pong! you submitted {} of {}", amount, resource))
+        .await?;
     Ok(())
 }
