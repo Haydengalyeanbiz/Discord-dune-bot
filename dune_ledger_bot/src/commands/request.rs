@@ -1,5 +1,6 @@
 use crate::{BotError, Context};
 use regex::Regex;
+// use regex::Regex;
 
 #[poise::command(slash_command, subcommands("start", "bulk_add"), subcommand_required)]
 pub async fn request(_: Context<'_>) -> Result<(), BotError> {
