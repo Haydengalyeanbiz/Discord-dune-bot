@@ -1,4 +1,4 @@
-use crate::{Context, BotError};
+use crate::{BotError, Context};
 // use regex::Regex;
 
 #[poise::command(slash_command, subcommands("start", "bulk_add"), subcommand_required)]
