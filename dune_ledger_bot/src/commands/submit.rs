@@ -57,7 +57,7 @@ pub async fn submit(
                         .and_then(|s| s.parse::<i32>().ok())
                         .unwrap_or(0);
                     let new_value = current + amount;
-                    updated_ledger_values.push(vec![resource.clone().into(), new_value.to_string().to_lowercase().into()]);
+                    updated_ledger_values.push(vec![resource.clone().to_lowercase().into(), new_value.to_string().into()]);
                     found_in_ledger = true;
                 } else {
                     updated_ledger_values.push(row.clone());
@@ -67,7 +67,7 @@ pub async fn submit(
     }
 
     if !found_in_ledger {
-        updated_ledger_values.push(vec![resource.clone().into(), amount.to_string().to_lowercase().into()]);
+        updated_ledger_values.push(vec![resource.clone().to_lowercase().into(), amount.to_string().into()]);
     }
 
     hub.spreadsheets()
