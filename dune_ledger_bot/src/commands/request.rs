@@ -1,11 +1,15 @@
 use crate::{BotError, Context};
 use dashmap::DashMap;
+use dotenvy::dotenv;
+use google_sheets4 as sheets4;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude::{
     ChannelId, CreateEmbed, CreateMessage, CreateThread, Message, MessageId, UserId,
 };
 use regex::Regex;
-use std::collections::HashMap;
+use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
+// use std::collections::HashMap;
+use std::env;
 
 // for storing a request in-progress, and for the bot to manipulate
 struct InProgressRequest {
@@ -78,7 +82,10 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
     // ...and parse input into amount:resource pairs
     let mut results: Vec<(u64, String)> = Vec::new();
     for (_, [amount, resource, _]) in re.captures_iter(&sanitized_list).map(|c| c.extract()) {
-        results.push((amount.parse::<u64>()?, resource.trim().to_string()));
+        results.push((
+            amount.parse::<u64>()?,
+            resource.trim().to_string().to_lowercase(),
+        ));
     }
 
     // Pull out the in‐flight request, update its resources, and re‐insert
@@ -104,8 +111,61 @@ pub async fn bulk_add(
     ctx: Context<'_>,
     #[description = "Paste the raw resource list here"] raw_resource_list: String,
 ) -> Result<(), BotError> {
+    dotenv().ok();
+    let service_account_key =
+        yup_oauth2::read_service_account_key("secrets/voltaic-bridge-465115-j2-f15defee98d4.json")
+            .await
+            .expect("Can't read credential, an error occurred");
+    let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
+        .build()
+        .await
+        .expect("failed to create authenticator");
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        );
+    let hub = Sheets::new(client, authenticator);
+
     // Show the user a preview using your existing formatter
     let preview: String = parse_resources(&ctx, &raw_resource_list).await?;
+    let user = ctx.author().id;
+    let entry = IN_FLIGHT
+        .get(&user)
+        .ok_or("❌ Could not find in-flight request after parsing.")?;
+
+    // ✅ Build rows to append
+    let mut values = vec![];
+    for (amount, resource) in entry.resources.iter() {
+        values.push(vec![
+            entry.product.clone().into(), // Product
+            resource.clone().into(),      // Resource name
+            amount.to_string().into(),    // Amount
+            "in_progress".into(),         // Status (optional)
+        ]);
+    }
+
+    // ✅ Append to sheet
+    let request_range = "Sheet1!A:D";
+    let request_spreadsheet_id = std::env::var("SPREADSHEET_ID_REQUEST")?;
+
+    hub.spreadsheets()
+        .values_append(
+            ValueRange {
+                range: Some(request_range.to_string()),
+                values: Some(values),
+                ..Default::default()
+            },
+            &request_spreadsheet_id,
+            request_range,
+        )
+        .value_input_option("RAW")
+        .doit()
+        .await?;
     ctx.say(format!(
         "✅ Resources recorded.```{}```Now finalize your request with `/request finish`.",
         preview
@@ -115,9 +175,61 @@ pub async fn bulk_add(
     Ok(())
 }
 
-async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotError> {
+fn normalize_resource_key(s: &str) -> String {
+    s.trim_matches('"') // removes leading/trailing `"` if present
+        .replace('\u{00a0}', " ") // replace non-breaking space
+        .to_lowercase()
+        .trim()
+        .to_string()
+}
+
+async fn load_inventory_from_sheets() -> Result<std::collections::HashMap<String, u64>, BotError> {
     // TODO: replace with real Sheets lookup
-    let inventory = HashMap::new();
+    dotenv().ok();
+    let service_account_key =
+        yup_oauth2::read_service_account_key("secrets/voltaic-bridge-465115-j2-f15defee98d4.json")
+            .await
+            .expect("Can't read credential, an error occurred");
+    let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
+        .build()
+        .await
+        .expect("failed to create authenticator");
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        );
+    let hub = Sheets::new(client, authenticator);
+    let ledger_spreadsheet_id = env::var("SPREADSHEET_ID_LEDGER")?;
+    let range = "Sheet1!A:B";
+
+    let result = hub
+        .spreadsheets()
+        .values_get(&ledger_spreadsheet_id, &range)
+        .doit()
+        .await?;
+
+    let values = result.1.values.unwrap_or_default();
+    let mut inventory = std::collections::HashMap::new();
+    for row in values {
+        if row.len() < 2 {
+            continue;
+        }
+
+        let name = normalize_resource_key(&row[0].to_string());
+        let amount = row[1]
+            .as_str()
+            .unwrap_or("0")
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0);
+        inventory.insert(name, amount);
+    }
+    println!("THIS IS THE INVENTORY => {:?}", inventory);
     Ok(inventory)
 }
 
@@ -140,14 +252,15 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .resources
         .into_iter()
         .filter_map(|(req_amt, name)| {
-            let stock = *inventory.get(&name).unwrap_or(&0);
+            let normalized_name = normalize_resource_key(&name);
+            let stock = *inventory.get(&normalized_name).unwrap_or(&0);
             req_amt
                 .checked_sub(stock)
                 .filter(|&n| n > 0)
                 .map(|n| (n, name))
         })
         .collect();
-
+    println!("THIS IS THE NEEDED => {:?}", needed);
     // Build the embed
     let rem_text = needed
         .iter()
