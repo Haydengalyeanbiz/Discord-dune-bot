@@ -34,7 +34,6 @@ pub async fn start(
     ctx: Context<'_>,
     #[description = "Title for the request"] product: String,
 ) -> Result<(), BotError> {
-    
     let user = ctx.author().id;
 
     // Prevent overlapping requests
@@ -83,7 +82,10 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
     // ...and parse input into amount:resource pairs
     let mut results: Vec<(u64, String)> = Vec::new();
     for (_, [amount, resource, _]) in re.captures_iter(&sanitized_list).map(|c| c.extract()) {
-        results.push((amount.parse::<u64>()?, resource.trim().to_string().to_lowercase()));
+        results.push((
+            amount.parse::<u64>()?,
+            resource.trim().to_string().to_lowercase(),
+        ));
     }
 
     // Pull out the in‐flight request, update its resources, and re‐insert
@@ -140,26 +142,26 @@ pub async fn bulk_add(
     let mut values = vec![];
     for (amount, resource) in entry.resources.iter() {
         values.push(vec![
-            entry.product.clone().into(),     // Product
-            resource.clone().into(),          // Resource name
-            amount.to_string().into(),        // Amount
-            "in_progress".into(),             // Status (optional)
+            entry.product.clone().into(), // Product
+            resource.clone().into(),      // Resource name
+            amount.to_string().into(),    // Amount
+            "in_progress".into(),         // Status (optional)
         ]);
     }
 
     // ✅ Append to sheet
-    let request_range = "Sheet1!A:D"; 
+    let request_range = "Sheet1!A:D";
     let request_spreadsheet_id = std::env::var("SPREADSHEET_ID_REQUEST")?;
 
     hub.spreadsheets()
         .values_append(
             ValueRange {
                 range: Some(request_range.to_string()),
-                 values: Some(values),
+                values: Some(values),
                 ..Default::default()
             },
             &request_spreadsheet_id,
-            request_range
+            request_range,
         )
         .value_input_option("RAW")
         .doit()
