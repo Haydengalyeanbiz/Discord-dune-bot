@@ -21,8 +21,10 @@ const ALL_RESOURCES: &[&str] = &[
     "Carbide Blade Parts",
     "Carbide Scraps",
     "Carbon Ore",
+    "Cobalt Paste",
     "Complex Machinery",
     "Copper Ore",
+    "Corpse",
     "Diamodine Blade Parts",
     "Diamondine Dust",
     "EMF Generator",
@@ -81,7 +83,7 @@ const ALL_RESOURCES: &[&str] = &[
     "Thermoelectric Cooler",
     "Titanium Ore",
     "TriForged Hydraulic Piston",
-    "Water",
+    "Worm Tooth",
 ];
 
 /// Autocomplete handler for the `resource: String` argument.
@@ -152,6 +154,17 @@ pub async fn submit(
     let now: DateTime<Utc> = Utc::now();
     let date = now.to_rfc3339();
     let user = ctx.author().name.clone();
+    if !ALL_RESOURCES
+        .iter()
+        .any(|&r| r.eq_ignore_ascii_case(&resource))
+    {
+        ctx.say(format!(
+            "❌ '{}' is not a recognized resource. Please choose from the autocompleted options.",
+            resource
+        ))
+        .await?;
+        return Ok(()); // Exit early
+    }
     // * Loops through the sheet checking if the resource exists.
     // * Checks if the input resource matches the current resources.
     // * If it does then it takes the input value and adds the current and new value into the array.
