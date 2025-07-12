@@ -244,28 +244,42 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
 
     // Compute required diff vs. sheet inventory for final request posting
     let inventory = load_inventory_from_sheets().await?;
-    let needed: Vec<(u64, String)> = entry
-        .resources
-        .into_iter()
-        .filter_map(|(req_amt, name)| {
-            let normalized_name = normalize_resource_key(&name);
-            let stock = *inventory.get(&normalized_name).unwrap_or(&0);
-            req_amt
-                .checked_sub(stock)
-                .filter(|&n| n > 0)
-                .map(|n| (n, name))
-        })
-        .collect();
+    let mut needed: Vec<(u64, String)> = Vec::new();
+    let mut completed: Vec<(u64, String)> = Vec::new();
+
+    for (req_amt, name) in entry.resources {
+        let normalized_name = normalize_resource_key(&name);
+        let stock = *inventory.get(&normalized_name).unwrap_or(&0);
+        if stock >= req_amt {
+            completed.push((req_amt, name));
+        } else if let Some(diff) = req_amt.checked_sub(stock) {
+            needed.push((diff, name));
+        }
+    }
     // println!("THIS IS THE NEEDED => {:?}", needed);
     // Build the embed
-    let rem_text = needed
-        .iter()
-        .map(|(amt, nm)| format!("• {} x {}", amt, nm))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let comp_text = if completed.is_empty() {
+    "Nothing yet…".to_string()
+    } else {
+        completed
+            .iter()
+            .map(|(amt, nm)| format!("• {} x {}", amt, nm))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let rem_text = if needed.is_empty() {
+        "✅ All resources are available in inventory!".to_string()
+    } else {
+        needed
+            .iter()
+            .map(|(amt, nm)| format!("• {} x {}", amt, nm))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let embed = CreateEmbed::new()
         .title(format!("🔷 CRAFTING REQUEST: {}", entry.product))
-        .field("✅ Completed:", "Nothing yet…", false)
+        .field("✅ Completed:", comp_text, false)
         .field("🛠️ Remaining Materials:", rem_text, false);
 
     let msg_builder = CreateMessage::new().embed(embed.clone());
