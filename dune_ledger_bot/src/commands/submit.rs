@@ -1,16 +1,104 @@
-use crate::BotError;
-use crate::Context;
+use crate::{BotError, Context};
 
 use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
 use google_sheets4 as sheets4;
+use poise::serenity_prelude::AutocompleteChoice;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
 use std::env::var;
+
+const ALL_RESOURCES: &[&str] = &[
+    "Advanced Machinery",
+    "Advanced Servoks",
+    "Agave Seeds",
+    "Aluminum Ore",
+    "Armor Plating",
+    "Atmospheric Filtered Fabric",
+    "Ballistic Weave Fabric",
+    "Basalt Stone",
+    "Blade Parts",
+    "Calibrated Servok",
+    "Carbide Blade Parts",
+    "Carbide Scraps",
+    "Carbon Ore",
+    "Complex Machinery",
+    "Copper Ore",
+    "Diamodine Blade Parts",
+    "Diamondine Dust",
+    "EMF Generator",
+    "Erythrite Crystal",
+    "Flour Sand",
+    "Fluid Efficient Industrial Pump",
+    "Fluted Heavy Caliber Compressor",
+    "Fluted Light Caliber Compressor",
+    "Fuel Cell",
+    "Granite Stone",
+    "Gun Parts",
+    "Heavy Caliber Compressor",
+    "Holtzman Actuator",
+    "Hydraulic Piston",
+    "Improved Holtzman Actuator",
+    "Improved Watertube",
+    "Industrial Pump",
+    "Insulated Fabric",
+    "Iron Ore",
+    "Irradiated Core",
+    "Irradiated Slag",
+    "Jasmium Crystal",
+    "Light Caliber Compressor",
+    "Mechanical Parts",
+    "Microsandwich Fabric",
+    "Military Power Regulator",
+    "Mouse Corpse",
+    "Offworld Medical Supplies",
+    "Opafire Gem",
+    "Overclocked Power Regulator",
+    "Particle Capacitor",
+    "Plant Fiber",
+    "Plasteel Composite Armor Plating",
+    "Plasteel Composite Blade Parts",
+    "Plasteel Composite Gun Parts",
+    "Plasteel Microflora Fiber",
+    "Plasteel Plate",
+    "Precision Range Finder",
+    "Range Finder",
+    "Ray Amplifier",
+    "Salvaged Metal",
+    "Sandtrout Leathers",
+    "Ship Manifest",
+    "Solari",
+    "Spice Residue",
+    "Spice Sand",
+    "Spiceinfused Aluminum Dust",
+    "Spiceinfused Copper Dust",
+    "Spiceinfused Duraluminum Dust",
+    "Spiceinfused Iron Dust",
+    "Spiceinfused Plastanium Dust",
+    "Spiceinfused Steel Dust",
+    "Stillsuit Tubing",
+    "Stravidium Mass",
+    "ThermoResponsive Ray Amplifier",
+    "Thermoelectric Cooler",
+    "Titanium Ore",
+    "TriForged Hydraulic Piston",
+    "Water",
+];
+
+/// Autocomplete handler for the `resource: String` argument.
+async fn resource_autocomplete<'a>(_ctx: Context<'a>, partial: &str) -> Vec<AutocompleteChoice> {
+    ALL_RESOURCES
+        .iter()
+        .filter(|name| name.to_lowercase().contains(&partial.to_lowercase()))
+        .take(25)
+        .map(|name| AutocompleteChoice::new(name.to_string(), name.to_string()))
+        .collect()
+}
 
 #[poise::command(slash_command)]
 pub async fn submit(
     ctx: Context<'_>,
-    #[description = "Resource to submit"] resource: String,
+    // #[description = "Resource to submit"]
+    #[autocomplete = "resource_autocomplete"] resource: String,
     #[description = "Amount to submit"] amount: i32,
 ) -> Result<(), BotError> {
     dotenv().ok();
@@ -70,7 +158,8 @@ pub async fn submit(
     for row in ledger_values {
         if let Some(name_val) = row.get(0) {
             if let Some(name) = name_val.as_str() {
-                if name.to_lowercase() == resource.to_lowercase() {
+                let resource_key = resource.to_string().to_lowercase();
+                if name.to_lowercase() == resource_key {
                     let current: i32 = row
                         .get(1)
                         .and_then(|v| v.as_str())
@@ -95,7 +184,7 @@ pub async fn submit(
     // * If not then it creates a new line with the new resource and value and inputs it into the array.
     if !found_in_ledger {
         updated_ledger_values.push(vec![
-            resource.clone().to_lowercase().into(),
+            resource.clone().to_string().to_lowercase().into(),
             amount.to_string().into(),
         ]);
     }
