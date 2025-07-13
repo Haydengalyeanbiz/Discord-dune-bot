@@ -1,6 +1,7 @@
 mod commands;
 use commands::request::request;
 use commands::submit::submit;
+mod utils;
 
 use dotenvy::dotenv;
 use poise::builtins::register_in_guild;
