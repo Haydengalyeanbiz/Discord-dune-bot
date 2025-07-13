@@ -1,11 +1,14 @@
 use crate::{BotError, Context};
+use crate::utils::sheets::{load_inventory_from_sheets, normalize_resource_key};
 
 use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
 use google_sheets4 as sheets4;
 use poise::serenity_prelude::AutocompleteChoice;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
+use poise::serenity_prelude::{CreateEmbed};
 use std::env::var;
+use std::collections::HashMap;
 
 const ALL_RESOURCES: &[&str] = &[
     "Advanced Machinery",
@@ -21,7 +24,6 @@ const ALL_RESOURCES: &[&str] = &[
     "Carbide Blade Parts",
     "Carbide Scraps",
     "Carbon Ore",
-    "Cobalt Paste",
     "Complex Machinery",
     "Copper Ore",
     "Corpse",
@@ -83,7 +85,6 @@ const ALL_RESOURCES: &[&str] = &[
     "Thermoelectric Cooler",
     "Titanium Ore",
     "TriForged Hydraulic Piston",
-    "Worm Tooth",
 ];
 
 /// Autocomplete handler for the `resource: String` argument.
@@ -180,10 +181,10 @@ pub async fn submit(
                         .unwrap_or(0);
                     let new_value = current + amount;
                     updated_ledger_values
-                        .push(vec![name_val.clone().into(), new_value.to_string().into()]);
+                        .push(vec![name_val.clone().into(), new_value.into()]);
                     clone_updated_values.push(vec![
                         name_val.clone().into(),
-                        amount.to_string().into(),
+                        amount.into(),
                         date.clone().into(),
                         user.clone().into(),
                     ]);
@@ -198,7 +199,7 @@ pub async fn submit(
     if !found_in_ledger {
         updated_ledger_values.push(vec![
             resource.clone().to_string().to_lowercase().into(),
-            amount.to_string().into(),
+            amount.into(),
         ]);
     }
 
@@ -234,6 +235,102 @@ pub async fn submit(
         .value_input_option("RAW")
         .doit()
         .await?;
+
+    let request_spreadsheet_id = var("SPREADSHEET_ID_REQUEST")?;
+    let request_range = "Sheet1!A:D";
+    let mut inventory = load_inventory_from_sheets().await?; // refresh after update
+    let request_result = hub
+        .spreadsheets()
+        .values_get(&request_spreadsheet_id, request_range)
+        .doit()
+        .await?;
+
+    let mut request_values = request_result.1.values.unwrap_or_default();
+    let mut updated_request_rows = Vec::new();
+    let mut completed_by_product: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+    let mut needed_by_product: HashMap<String, Vec<(u64, String)>> = HashMap::new();
+
+    for row in request_values.iter_mut() {
+        if row.len() < 4 {
+            continue;
+        }
+
+        let req_resource = normalize_resource_key(row[1].as_str().unwrap_or(""));
+        let req_amount: u64 = row[2].as_str().unwrap_or("0").parse().unwrap_or(0);
+        let status = row[3].as_str().unwrap_or("");
+        let product = row[0].as_str().unwrap_or("").to_string();
+
+        if req_resource == normalize_resource_key(&resource) && status == "in_progress" {
+            let stock = *inventory.get(&req_resource).unwrap_or(&0);
+            if stock >= req_amount {
+                completed_by_product
+                    .entry(product.clone())
+                    .or_default()
+                    .push((req_amount, row[1].to_string().clone()));
+                row[2] = "0".into();
+                inventory.insert(req_resource.clone(), stock - req_amount);
+            } else {
+                let remaining = req_amount - stock;
+                needed_by_product
+                    .entry(product.clone())
+                    .or_default()
+                    .push((remaining, row[1].to_string().clone()));
+                row[2] = remaining.to_string().into();
+                inventory.insert(req_resource.clone(), 0);
+            }
+
+            updated_request_rows.push(row.clone());
+        }
+    }
+
+    if !updated_request_rows.is_empty() {
+        hub.spreadsheets()
+            .values_update(
+                ValueRange {
+                    range: Some(request_range.to_string()),
+                    values: Some(request_values),
+                    ..Default::default()
+                },
+                &request_spreadsheet_id,
+                request_range,
+            )
+            .value_input_option("RAW")
+            .doit()
+            .await?;
+    }
+
+    for (product, completed) in completed_by_product.iter() {
+        let empty = Vec::new();
+        let needed = needed_by_product.get(product).unwrap_or(&empty);
+
+        let comp_text = if completed.is_empty() {
+            "Nothing completed yet.".to_string()
+        } else {
+            completed
+                .iter()
+                .map(|(amt, res)| format!("• {} x {}", amt, res))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let rem_text = if needed.is_empty() {
+            "✅ All materials fulfilled!".to_string()
+        } else {
+            needed
+                .iter()
+                .map(|(amt, res)| format!("• {} x {}", amt, res))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let embed = CreateEmbed::new()
+            .title(format!("📦 Updated Request: {}", product))
+            .field("✅ Completed:", comp_text, false)
+            .field("🛠️ Still Needed:", rem_text, false);
+
+        ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    }
+
     // * The bot then returns a string stating the resource and value were submitted into the sheet.
     ctx.say(format!(
         "✅ Submitted {} of {} to the sheet!",

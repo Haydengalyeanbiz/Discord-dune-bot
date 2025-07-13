@@ -1,6 +1,7 @@
 mod commands;
 use commands::request::request;
 use commands::submit::submit;
+mod utils;
 
 use dotenvy::dotenv;
 use poise::serenity_prelude as serenity;

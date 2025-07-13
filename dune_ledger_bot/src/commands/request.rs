@@ -7,11 +7,12 @@ use hyper_util::client::legacy::Client as LegacyClient;
 use hyper_util::rt::TokioExecutor;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude::{
-    ChannelId, CreateEmbed, CreateMessage, CreateThread, Message, MessageId, UserId,
+    ChannelId, CreateEmbed, CreateMessage, CreateThread, Message, MessageId, UserId, 
 };
 use regex::Regex;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
-use std::{collections::HashMap, env::var};
+use std::{ env::var};
+use crate::utils::sheets::{load_inventory_from_sheets, normalize_resource_key};
 // for storing a request in-progress, and for the bot to manipulate
 const SERVICE_ACCOUNT_PATH: &str = "secrets/voltaic-bridge-465115-j2-f15defee98d4.json";
 struct InProgressRequest {
@@ -114,6 +115,24 @@ pub async fn bulk_add(
     ctx: Context<'_>,
     #[description = "Paste the raw resource list here"] raw_resource_list: String,
 ) -> Result<(), BotError> {
+    
+    // Show the user a preview using your existing formatter
+    let preview: String = parse_resources(&ctx, &raw_resource_list).await?;
+    let user = ctx.author().id;
+    let entry = IN_FLIGHT
+        .get(&user)
+        .ok_or("❌ Could not find in-flight request after parsing.")?;
+
+    ctx.say(format!(
+        "✅ Resources recorded.```{}```Now finalize your request with `/request finish`.",
+        preview
+    ))
+    .await?;
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
     let service_account_key = yup_oauth2::read_service_account_key(SERVICE_ACCOUNT_PATH)
         .await
         .expect("Can't read credential, an error occurred");
@@ -130,25 +149,40 @@ pub async fn bulk_add(
         .build();
     let client = LegacyClient::builder(executor).build(https_connector);
     let hub = Sheets::new(client, authenticator);
-    // Show the user a preview using your existing formatter
-    let preview: String = parse_resources(&ctx, &raw_resource_list).await?;
     let user = ctx.author().id;
-    let entry = IN_FLIGHT
-        .get(&user)
-        .ok_or("❌ Could not find in-flight request after parsing.")?;
 
-    // ✅ Build rows to append
+    // Post in a pre-defined channel specific for request threads
+    let target_channel_id: ChannelId = var("REQUESTS_CHANNEL_ID")?.parse::<u64>()?.into();
+
+    // Access the stored request data
+    let entry = IN_FLIGHT
+        .remove(&user)
+        .ok_or("You have no active request. Start one with `/request start`.")?
+        .1;
+
+    // Compute required diff vs. sheet inventory for final request posting
+    let inventory = load_inventory_from_sheets().await?;
+    let mut needed: Vec<(u64, String)> = Vec::new();
+    let mut completed: Vec<(u64, String)> = Vec::new();
     let mut values = vec![];
-    for (amount, resource) in entry.resources.iter() {
-        values.push(vec![
-            entry.product.clone().into(), // Product
-            resource.clone().into(),      // Resource name
-            amount.to_string().into(),    // Amount
-            "in_progress".into(),         // Status (optional)
-        ]);
+
+    for (req_amt, name) in entry.resources {
+        let normalized_name = normalize_resource_key(&name);
+        let stock = *inventory.get(&normalized_name).unwrap_or(&0);
+
+        if stock >= req_amt {
+            completed.push((req_amt, name));
+        } else if let Some(diff) = req_amt.checked_sub(stock) {
+            needed.push((diff, name.clone()));
+            values.push(vec![
+                entry.product.clone().into(),
+                name.clone().into(),
+                diff.to_string().into(),
+                "in_progress".into(),
+            ]);
+        }
     }
 
-    // ✅ Append to sheet
     let request_range = "Sheet1!A:D";
     let request_spreadsheet_id = var("SPREADSHEET_ID_REQUEST")?;
 
@@ -165,97 +199,7 @@ pub async fn bulk_add(
         .value_input_option("RAW")
         .doit()
         .await?;
-
-    ctx.say(format!(
-        "✅ Resources recorded.```{}```Now finalize your request with `/request finish`.",
-        preview
-    ))
-    .await?;
-    Ok(())
-}
-
-fn normalize_resource_key(s: &str) -> String {
-    s.trim_matches('"') // removes leading/trailing `"` if present
-        .replace('\u{00a0}', " ") // replace non-breaking space
-        .to_lowercase()
-        .trim()
-        .to_string()
-}
-
-async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotError> {
-    let service_account_key = yup_oauth2::read_service_account_key(SERVICE_ACCOUNT_PATH)
-        .await
-        .expect("Can't read credential, an error occurred");
-    let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
-        .build()
-        .await
-        .expect("failed to create authenticator");
-    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-        .build(
-            hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .unwrap()
-                .https_or_http()
-                .enable_http1()
-                .build(),
-        );
-    let hub = Sheets::new(client, authenticator);
-    let inventory_spreadsheet_id = var("SPREADSHEET_ID_INVENTORY")?;
-    let range = "Sheet1!A:B";
-
-    let result = hub
-        .spreadsheets()
-        .values_get(&inventory_spreadsheet_id, &range)
-        .doit()
-        .await?;
-
-    let values = result.1.values.unwrap_or_default();
-    let mut inventory = HashMap::new();
-    for row in values {
-        if row.len() < 2 {
-            continue;
-        }
-
-        let name = normalize_resource_key(&row[0].to_string());
-        let amount = row[1]
-            .as_str()
-            .unwrap_or("0")
-            .trim()
-            .parse::<u64>()
-            .unwrap_or(0);
-        inventory.insert(name, amount);
-    }
-    // println!("THIS IS THE INVENTORY => {:?}", inventory);
-    Ok(inventory)
-}
-
-#[poise::command(slash_command)]
-pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
-    let user = ctx.author().id;
-
-    // Post in a pre-defined channel specific for request threads
-    let target_channel_id: ChannelId = var("REQUESTS_CHANNEL_ID")?.parse::<u64>()?.into();
-
-    // Access the stored request data
-    let entry = IN_FLIGHT
-        .remove(&user)
-        .ok_or("You have no active request. Start one with `/request start`.")?
-        .1;
-
-    // Compute required diff vs. sheet inventory for final request posting
-    let inventory = load_inventory_from_sheets().await?;
-    let mut needed: Vec<(u64, String)> = Vec::new();
-    let mut completed: Vec<(u64, String)> = Vec::new();
-
-    for (req_amt, name) in entry.resources {
-        let normalized_name = normalize_resource_key(&name);
-        let stock = *inventory.get(&normalized_name).unwrap_or(&0);
-        if stock >= req_amt {
-            completed.push((req_amt, name));
-        } else if let Some(diff) = req_amt.checked_sub(stock) {
-            needed.push((diff, name));
-        }
-    }
+    
     // println!("THIS IS THE NEEDED => {:?}", needed);
     // Build the embed
     let comp_text = if completed.is_empty() {
@@ -283,6 +227,7 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .field("🛠️ Remaining Materials:", rem_text, false);
 
     let msg_builder = CreateMessage::new().embed(embed.clone());
+
     let post: Message = target_channel_id
         .send_message(&ctx.http(), msg_builder)
         .await?;
@@ -303,3 +248,4 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
 
     Ok(())
 }
+
