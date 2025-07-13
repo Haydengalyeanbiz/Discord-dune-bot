@@ -203,7 +203,7 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
     // println!("THIS IS THE NEEDED => {:?}", needed);
     // Build the embed
     let comp_text = if completed.is_empty() {
-    "Nothing yet…".to_string()
+        "Nothing yet…".to_string()
     } else {
         completed
             .iter()

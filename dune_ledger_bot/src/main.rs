@@ -4,8 +4,11 @@ use commands::submit::submit;
 mod utils;
 
 use dotenvy::dotenv;
+use poise::builtins::register_in_guild;
 use poise::serenity_prelude as serenity;
-use std::env;
+use serenity::model::id::GuildId;
+use std::env::var;
+// use serenity::all::Command;
 
 struct Data {}
 
@@ -17,7 +20,7 @@ async fn main() -> Result<(), BotError> {
     dotenv().ok();
 
     // ─── Bot startup ─────────────────────────────────────────
-    let token = env::var("DISCORD_TOKEN").expect("Expected DISCORD_TOKEN in env");
+    let token = var("DISCORD_TOKEN").expect("Expected DISCORD_TOKEN in env");
     let intents = serenity::GatewayIntents::non_privileged();
 
     let options = poise::FrameworkOptions {
@@ -30,10 +33,11 @@ async fn main() -> Result<(), BotError> {
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 let http = &ctx.http;
-                let guild_id: u64 = env::var("GUILD_ID")?.parse()?;
-                let guild = serenity::model::id::GuildId::new(guild_id);
-                poise::builtins::register_in_guild(http, &framework.options().commands, guild)
-                    .await?;
+                let guild_id: u64 = var("GUILD_ID")?.parse()?;
+                let guild = GuildId::new(guild_id);
+                // *For de-registering leftover global commands
+                // Command::set_global_commands(&ctx.http, Vec::new()).await?;
+                register_in_guild(http, &framework.options().commands, guild).await?;
                 Ok(Data {})
             })
         })
@@ -42,7 +46,6 @@ async fn main() -> Result<(), BotError> {
     let mut client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
         .await?;
-
     client.start().await?;
 
     Ok(())
