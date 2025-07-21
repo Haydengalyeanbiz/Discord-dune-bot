@@ -203,9 +203,7 @@ pub async fn submit(
         ]);
     }
 
-    // After pushing to the updated values we need a clone for multisheet use
-
-    // Send the original updated values to the inventory sheet
+    
     hub.spreadsheets()
         .values_update(
             ValueRange {
@@ -331,7 +329,6 @@ pub async fn submit(
         ctx.send(poise::CreateReply::default().embed(embed)).await?;
     }
 
-    // * The bot then returns a string stating the resource and value were submitted into the sheet.
     ctx.say(format!(
         "✅ Submitted {} of {} to the sheet!",
         amount, resource
