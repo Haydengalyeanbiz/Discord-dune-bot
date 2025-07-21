@@ -1,8 +1,8 @@
 use crate::BotError;
-use std::{collections::HashMap, env::var};
 use dotenvy::dotenv;
 use google_sheets4 as sheets4;
 use sheets4::{Sheets, hyper_rustls, yup_oauth2};
+use std::{collections::HashMap, env::var};
 const SERVICE_ACCOUNT_PATH: &str = "secrets/voltaic-bridge-465115-j2-f15defee98d4.json";
 
 pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotError> {
