@@ -105,20 +105,17 @@ pub async fn submit(
     #[description = "Amount to submit"] amount: i32,
 ) -> Result<(), BotError> {
     dotenv().ok();
-
-    // * Sets the service account json file for google authentication
+    ctx.defer().await?;
     let service_account_key =
         yup_oauth2::read_service_account_key("secrets/voltaic-bridge-465115-j2-f15defee98d4.json")
             .await
             .expect("Can't read credential, an error occurred");
 
-    // * Builds the authentication using the service account key
     let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
         .build()
         .await
         .expect("failed to create authenticator");
 
-    // * Constructs a HTTP client with HTTPS/HTTP support using hyper-util and Tokio
     let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build(
             hyper_rustls::HttpsConnectorBuilder::new()
@@ -129,16 +126,12 @@ pub async fn submit(
                 .build(),
         );
 
-    // * Creates the hub (SHEET) to target columns and rows and manipulate the sheet
     let hub = Sheets::new(client, authenticator);
 
-    // * Targets the excel spreadsheet by ID
     let inventory_spreadsheet_id = var("SPREADSHEET_ID_INVENTORY")?;
     // let request_spreadsheet_id = var("SPREADSHEET_ID_REQUEST");
-    // * Sets the range of the sheet/ targeting specific rows and columns
     let range = "Sheet1!A:B";
 
-    // * Grabs the current data inside of the spreadsheet
     let ledger_values = hub
         .spreadsheets()
         .values_get(&inventory_spreadsheet_id, range)
@@ -148,7 +141,6 @@ pub async fn submit(
         .values
         .unwrap_or_default();
 
-    // * Creating variables to check the sheet and a new array for inputing in the sheet
     let mut found_in_ledger = false;
     let mut updated_ledger_values = vec![];
     let mut clone_updated_values = updated_ledger_values.clone();
@@ -166,9 +158,7 @@ pub async fn submit(
         .await?;
         return Ok(()); // Exit early
     }
-    // * Loops through the sheet checking if the resource exists.
-    // * Checks if the input resource matches the current resources.
-    // * If it does then it takes the input value and adds the current and new value into the array.
+    
     for row in ledger_values {
         if let Some(name_val) = row.get(0) {
             if let Some(name) = name_val.as_str() {
@@ -195,7 +185,7 @@ pub async fn submit(
             }
         }
     }
-    // * If not then it creates a new line with the new resource and value and inputs it into the array.
+    
     if !found_in_ledger {
         updated_ledger_values.push(vec![
             resource.clone().to_string().to_lowercase().into(),
@@ -203,7 +193,7 @@ pub async fn submit(
         ]);
     }
 
-    
+
     hub.spreadsheets()
         .values_update(
             ValueRange {
