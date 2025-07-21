@@ -1,14 +1,14 @@
-use crate::{BotError, Context};
 use crate::utils::sheets::{load_inventory_from_sheets, normalize_resource_key};
+use crate::{BotError, Context};
 
 use chrono::{DateTime, Utc};
 use dotenvy::dotenv;
 use google_sheets4 as sheets4;
 use poise::serenity_prelude::AutocompleteChoice;
+use poise::serenity_prelude::CreateEmbed;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
-use poise::serenity_prelude::{CreateEmbed};
-use std::env::var;
 use std::collections::HashMap;
+use std::env::var;
 
 const ALL_RESOURCES: &[&str] = &[
     "Advanced Machinery",
@@ -180,8 +180,7 @@ pub async fn submit(
                         .and_then(|s| s.parse::<i32>().ok())
                         .unwrap_or(0);
                     let new_value = current + amount;
-                    updated_ledger_values
-                        .push(vec![name_val.clone().into(), new_value.into()]);
+                    updated_ledger_values.push(vec![name_val.clone().into(), new_value.into()]);
                     clone_updated_values.push(vec![
                         name_val.clone().into(),
                         amount.into(),
