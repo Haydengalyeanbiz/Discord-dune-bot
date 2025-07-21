@@ -1,3 +1,4 @@
+use crate::utils::sheets::{load_inventory_from_sheets, normalize_resource_key};
 use crate::{BotError, Context};
 use dashmap::DashMap;
 use dotenvy::dotenv;
@@ -7,14 +8,13 @@ use hyper_util::client::legacy::Client as LegacyClient;
 use hyper_util::rt::TokioExecutor;
 use once_cell::sync::Lazy;
 use poise::serenity_prelude::{
-    ChannelId, CreateEmbed, CreateMessage, CreateThread, Message, MessageId, UserId, 
+    ChannelId, CreateEmbed, CreateMessage, CreateThread, Message, MessageId, UserId,
 };
 use regex::Regex;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
-use std::{ env::var};
-use crate::utils::sheets::{load_inventory_from_sheets, normalize_resource_key};
-// for storing a request in-progress, and for the bot to manipulate
+use std::env::var;
 const SERVICE_ACCOUNT_PATH: &str = "secrets/voltaic-bridge-465115-j2-f15defee98d4.json";
+// For storing an ongoing request in the bot's memory
 struct InProgressRequest {
     product: String,
     resources: Vec<(u64, String)>,
@@ -59,7 +59,6 @@ pub async fn start(
         .send_message(&ctx.http(), confirmation_builder)
         .await?;
 
-    // Store in-flight state
     IN_FLIGHT.insert(
         user,
         InProgressRequest {
@@ -73,9 +72,10 @@ pub async fn start(
     Ok(())
 }
 
-// *Expects raw resource list pasted from crafting calc i.e. https://dune.geno.gg/calculator/
+//* Expects raw resource list pasted from crafting calc → https://dune.geno.gg/calculator/
 async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotError> {
     let re = Regex::new(r"(?<amount>[0-9]+)(?<name>\s+([A-Za-z]+\s*)+)").unwrap();
+
     // Sanitize input...
     let sanitized_list = input
         .replace(",", "")
@@ -83,31 +83,59 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
         .replace("-", "")
         .replace("•", "")
         .replace(":", "");
-    // ...and parse input into amount:resource pairs
-    let mut results: Vec<(u64, String)> = Vec::new();
-    for (_, [amount, resource, _]) in re.captures_iter(&sanitized_list).map(|c| c.extract()) {
-        results.push((
-            amount.parse::<u64>()?,
-            resource.trim().to_string().to_lowercase(),
-        ));
+
+    // ...and parse input into "<amount>,<name>" pairs
+    let mut parsed_items: Vec<(u64, String)> = Vec::new();
+    for caps in re.captures_iter(&sanitized_list) {
+        let amt = caps["amount"].parse::<u64>()?;
+        let name = caps.name("name").unwrap().as_str().trim().to_lowercase();
+        parsed_items.push((amt, name));
     }
 
-    // Pull out the in‐flight request, update its resources, and re‐insert
+    // Convert any water → corpse, dropping <1 corpse
+    const WATER_PER_CORPSE: u64 = 45_000;
+    let converted: Vec<(u64, String)> = parsed_items
+        .iter()
+        .filter_map(|&(amt, ref name)| {
+            if name == "water" {
+                let corpses = amt / WATER_PER_CORPSE;
+                if corpses > 0 {
+                    Some((corpses, "corpse".to_string()))
+                } else {
+                    None
+                }
+            } else {
+                Some((amt, name.clone()))
+            }
+        })
+        .collect();
+
+    // Stash request info into the in‐flight request
     let user: UserId = ctx.author().id;
     let mut entry = IN_FLIGHT
         .remove(&user)
         .ok_or("❌ You have no active request. Start with `/request start`.")?
         .1;
-    entry.resources = results.clone();
+    entry.resources = converted.clone();
     IN_FLIGHT.insert(user, entry);
 
-    // Build human‐readable summary of resource list
-    let lines: Vec<String> = results
+    // Build preview text for the user
+    let body = parsed_items
         .iter()
-        .map(|(amount, name)| format!("• {} x {},", amount, name))
-        .collect();
-    let body = lines.join("\n");
-    Ok(body.trim_end_matches(",").to_string())
+        .map(|(amount, name)| {
+            if name == "water" {
+                let corpses = amount / WATER_PER_CORPSE;
+                format!("• Converted: {} x water → {} x corpse", amount, corpses)
+            } else {
+                format!("• {} x {}", amount, name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end_matches(",")
+        .to_string();
+
+    Ok(body)
 }
 
 #[poise::command(slash_command)]
@@ -115,12 +143,10 @@ pub async fn bulk_add(
     ctx: Context<'_>,
     #[description = "Paste the raw resource list here"] raw_resource_list: String,
 ) -> Result<(), BotError> {
-    
-    // Show the user a preview using your existing formatter
     let preview: String = parse_resources(&ctx, &raw_resource_list).await?;
-    let user = ctx.author().id;
+    let user = ctx.author().id; //? can we refactor this out? not critical...
     let entry = IN_FLIGHT
-        .get(&user)
+        .get(&user) //? not sure where/how this "entry" is being used
         .ok_or("❌ Could not find in-flight request after parsing.")?;
 
     ctx.say(format!(
@@ -160,7 +186,7 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .ok_or("You have no active request. Start one with `/request start`.")?
         .1;
 
-    // Compute required diff vs. sheet inventory for final request posting
+    // Compute required diff vs. sheet inventory for final request post
     let inventory = load_inventory_from_sheets().await?;
     let mut needed: Vec<(u64, String)> = Vec::new();
     let mut completed: Vec<(u64, String)> = Vec::new();
@@ -199,9 +225,8 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .value_input_option("RAW")
         .doit()
         .await?;
-    
-    // println!("THIS IS THE NEEDED => {:?}", needed);
-    // Build the embed
+
+    // Build the Discord embed
     let comp_text = if completed.is_empty() {
         "Nothing yet…".to_string()
     } else {
@@ -238,7 +263,8 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .create_thread_from_message(&ctx.http(), post.id, thread_builder)
         .await?;
 
-    // Send your info message in the thread
+    // Send static welcome message in the thread
+    // TODO: Allow for adjustments to welcome message or request notes
     let info_builder = CreateMessage::new().content(
         "🛠 Please bring the materials to the Guild base for crafting. \n\n\
          Post below with what you've donated/contributed so we know the progress.\n\n\
@@ -248,4 +274,3 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
 
     Ok(())
 }
-
