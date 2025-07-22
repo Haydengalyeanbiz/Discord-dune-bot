@@ -49,13 +49,12 @@ pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotErr
             .unwrap_or(0);
         inventory.insert(name, amount);
     }
-    // println!("THIS IS THE INVENTORY => {:?}", inventory);
     Ok(inventory)
 }
 
 pub fn normalize_resource_key(s: &str) -> String {
-    s.trim_matches('"') // remove leading/trailing quotes
-        .replace('\u{00a0}', " ") // non-breaking space
+    s.trim_matches('"')
+        .replace('\u{00a0}', " ")
         .to_lowercase()
         .trim()
         .to_string()
