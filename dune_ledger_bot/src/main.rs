@@ -1,13 +1,15 @@
 mod commands;
 mod utils;
 
+use utils::sheets::{load_inventory_from_sheets, load_request_from_sheets};
+
 use commands::request::request;
 use commands::submit::submit;
 use dotenvy::dotenv;
 use poise::builtins::register_in_guild;
 use poise::serenity_prelude as serenity;
 // use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseData};
-use serenity::{CreateMessage, GuildId, Message};
+use serenity::{CreateMessage, CreateEmbed, GuildId, Message};
 use std::env::var;
 
 type BotError = Box<dyn std::error::Error + Send + Sync>;
@@ -77,21 +79,51 @@ async fn event_handler(
             if let serenity::Interaction::Component(comp) = interaction.clone() {
                 // dbg!("Comp:", &comp);
                 if comp.data.custom_id.starts_with("request_update") {
-                    let channel_id = comp.channel_id;
+                    // ! THIS PREVENTS THE TIMEOUT!!!!
+                    comp.defer(&ctx.http).await?;
 
-                    let msg_builder = CreateMessage::new().content("🔄 Update received!");
-                    let _post: Message = channel_id.send_message(&ctx.http, msg_builder).await?;
-                    // your existing "🔄 Update received!" logic:
-                    // let _ = comp
-                    //     .create_response(&ctx.http, |r: &mut CreateInteractionResponse| {
-                    //         r.interaction_response_data(|d: &mut CreateInteractionResponseData| {
-                    //             d.content.flags(MessageFlags::EPHEMERAL)
-                    //         })
-                    //     })
-                    //     .await?;
-                    //     })
-                    // })
-                    // .await?;
+                    let request_id = comp.data.custom_id["request_update:".len()..].to_string();
+
+                    let inventory = load_inventory_from_sheets().await?;
+                    let (product_name, request_resources) = load_request_from_sheets(&request_id).await?;
+
+                    let mut completed = Vec::new();
+                    let mut remaining = Vec::new();
+
+                    for (normalized_name, needed_amt) in &request_resources {
+                        let stock_amt = inventory.get(normalized_name).copied().unwrap_or(0);
+
+                        if stock_amt >= *needed_amt {
+                            completed.push(format!("• {} x {}", needed_amt, normalized_name));
+                        } else {
+                            remaining.push(format!("• {} x {}", needed_amt - stock_amt, normalized_name));
+                        }
+                    }
+
+                    let embed = CreateEmbed::new()
+                        .title(format!("🔷 CRAFTING REQUEST: {}", product_name))
+                        .field(
+                            "✅ Completed:",
+                            if completed.is_empty() {
+                                "Nothing yet...".into()
+                            } else {
+                                completed.join("\n")
+                            },
+                            false,
+                        )
+                        .field(
+                            "🛠 Remaining Materials:",
+                            if remaining.is_empty() {
+                                "All materials collected! 🎉".into()
+                            } else {
+                                remaining.join("\n")
+                            },
+                            false,
+                        );
+
+                    let msg = CreateMessage::new().embed(embed);
+
+                    let _ = comp.channel_id.send_message(&ctx.http, msg).await?;
                 }
             }
         }

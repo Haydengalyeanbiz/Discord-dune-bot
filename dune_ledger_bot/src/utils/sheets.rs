@@ -52,6 +52,63 @@ pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotErr
     Ok(inventory)
 }
 
+pub async fn load_request_from_sheets(request_id: &str) -> Result<(String, HashMap<String, u64>), BotError> {
+    dotenvy::dotenv().ok();
+    let service_account_key = yup_oauth2::read_service_account_key(SERVICE_ACCOUNT_PATH)
+        .await
+        .expect("Can't read credential, an error occurred");
+    let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
+        .build()
+        .await
+        .expect("failed to create authenticator");
+    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .unwrap()
+                .https_or_http()
+                .enable_http1()
+                .build(),
+        );
+    let hub = Sheets::new(client, authenticator);
+
+    let request_sheet_id = var("SPREADSHEET_ID_REQUEST")?;
+    let sheet_range = "Sheet1!A:E";
+
+    let result = hub
+        .spreadsheets()
+        .values_get(&request_sheet_id, sheet_range)
+        .doit()
+        .await?;
+
+    let values = result.1.values.unwrap_or_default();
+    let mut product_name = String::new();
+    let mut resource_map = HashMap::new();
+
+    for row in values {
+        if row.len() < 5 || row[0] != request_id {
+            continue;
+        }
+
+        if product_name.is_empty() {
+            product_name = row[1].to_string().clone();
+        }
+
+        let name_raw = row[2].to_string();
+        let normalized = normalize_resource_key(&name_raw);
+        let amount = row[3]
+            .as_str()
+            .unwrap_or("0")
+            .trim()
+            .parse::<u64>()
+            .unwrap_or(0);
+
+        resource_map.insert(normalized, amount);
+    }
+
+    Ok((product_name, resource_map))
+}
+
 pub fn normalize_resource_key(s: &str) -> String {
     s.trim_matches('"')
         .replace('\u{00a0}', " ")
