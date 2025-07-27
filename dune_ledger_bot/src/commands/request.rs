@@ -354,11 +354,17 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .title(format!("🔷 CRAFTING REQUEST: {}", entry.product))
         .field("🛠️ Request Materials:", request_text, false);
 
-    let msg_builder = CreateMessage::new().embed(embed.clone()).button(
-        CreateButton::new(format!("request_update:{request_id}"))
-            .label("🔄 Update")
-            .style(ButtonStyle::Primary),
-    );
+    let msg_builder = CreateMessage::new()
+        .embed(embed.clone())
+        .button(
+            CreateButton::new(format!("request_update:{request_id}"))
+                .label("🔄 Update")
+                .style(ButtonStyle::Primary),
+        ).button(
+            CreateButton::new(format!("request_complete:{request_id}"))
+                .label("✅ Complete")
+                .style(ButtonStyle::Success),
+        );
 
     let post: Message = target_channel_id
         .send_message(&ctx.http(), msg_builder)
