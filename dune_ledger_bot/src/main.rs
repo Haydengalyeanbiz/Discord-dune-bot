@@ -1,7 +1,7 @@
 mod commands;
 mod utils;
 
-use utils::sheets::{load_inventory_from_sheets, load_request_from_sheets};
+use utils::sheets::{load_inventory_from_sheets, load_request_from_sheets, complete_request};
 
 use commands::request::request;
 use commands::submit::submit;
@@ -124,6 +124,10 @@ async fn event_handler(
                     let msg = CreateMessage::new().embed(embed);
 
                     let _ = comp.channel_id.send_message(&ctx.http, msg).await?;
+                } else if comp.data.custom_id.starts_with("request_complete") {
+                    comp.defer(&ctx.http).await?;
+                    let request_id = comp.data.custom_id["request_complete:".len()..].to_string();
+                    complete_request(&ctx, &comp, &request_id).await?;
                 }
             }
         }
