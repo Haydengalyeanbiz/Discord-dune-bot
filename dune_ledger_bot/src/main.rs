@@ -37,6 +37,7 @@ async fn main() -> Result<(), BotError> {
                 let http = &ctx.http;
                 let guild_id: u64 = var("GUILD_ID")?.parse()?;
                 let guild = GuildId::new(guild_id);
+                // TODO: Remove duplicate slash functions throwing errors
                 // *For de-registering leftover global commands:
                 // Command::set_global_commands(&ctx.http, Vec::new()).await?;
                 register_in_guild(http, &framework.options().commands, guild).await?;
@@ -74,7 +75,6 @@ async fn event_handler(
                     comp.defer(&ctx.http).await?;
 
                     let request_id = comp.data.custom_id["request_update:".len()..].to_string();
-                    // println!("Request id => {}", request_id);
 
                     let inventory = load_inventory_from_sheets().await?;
                     let result = load_request_from_sheets(&request_id).await;
@@ -100,7 +100,7 @@ async fn event_handler(
                     let embed = CreateEmbed::new()
                         .title(format!("🔷 CRAFTING REQUEST: {}", product_name))
                         .field(
-                            "✅ Completed:",
+                            "✅ In Stock:",
                             if completed.is_empty() {
                                 "Nothing yet...".into()
                             } else {

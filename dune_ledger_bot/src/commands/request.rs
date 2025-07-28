@@ -28,7 +28,7 @@ struct InProgressRequest {
 }
 static IN_FLIGHT: Lazy<DashMap<UserId, InProgressRequest>> = Lazy::new(Default::default);
 
-// Build the update embed given product / resources / live inventory.
+// Build the embed to post with a resource update
 pub fn build_update_embed(
     product: &str,
     resources: &[(u64, String)],
@@ -111,7 +111,7 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
         parsed_items.push((amt, name));
     }
 
-    // Convert any water → corpse, dropping <1 corpse
+    // Convert any water → corpse, rounding down any fraction of corpse
     const WATER_PER_CORPSE: u64 = 45_000;
     let converted: Vec<(u64, String)> = parsed_items
         .iter()
@@ -129,7 +129,7 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
         })
         .collect();
 
-    // Stash request info into the in‐flight request
+    // Stash request info into the bot's active memory
     let user: UserId = ctx.author().id;
     let mut entry = IN_FLIGHT
         .remove(&user)
@@ -138,7 +138,7 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
     entry.resources = converted.clone();
     IN_FLIGHT.insert(user, entry);
 
-    // Build preview text for the user
+    // Build preview text for the user before confirming via /request finish
     let body = parsed_items
         .iter()
         .map(|(amount, name)| {
@@ -155,47 +155,6 @@ async fn parse_resources(ctx: &Context<'_>, input: &str) -> Result<String, BotEr
         .to_string();
 
     Ok(body)
-}
-
-/// Pulls back all rows whose column A matches `request_id`,
-/// returning (amount, name) for each.
-pub async fn _query_request_rows(request_id: &str) -> Result<Vec<(u64, String)>, BotError> {
-    let sa_key = read_service_account_key("secrets/voltaic-bridge-465115-j2-f15defee98d4.json")
-        .await
-        .map_err(|e| format!("SA key error: {}", e))?;
-    let auth = ServiceAccountAuthenticator::builder(sa_key).build().await?;
-    let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots()?
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client = LegacyClient::builder(TokioExecutor::new()).build(https_connector);
-    let hub = Sheets::new(client, auth);
-
-    let spreadsheet_id = var("SPREADSHEET_ID_REQUEST")?;
-    let raw = hub
-        .spreadsheets()
-        .values_get(&spreadsheet_id, "Sheet1!A:E")
-        .doit()
-        .await?
-        .1
-        .values
-        .unwrap_or_default();
-
-    // Filter rows by request_id & collect them to return
-    let mut rows = Vec::new();
-    for row in raw {
-        if row.get(0).and_then(|v| v.as_str()) == Some(request_id) {
-            if let (Some(name), Some(amt_val)) = (row.get(2), row.get(3)) {
-                if let Some(amt_str) = amt_val.as_str() {
-                    if let Ok(amt) = amt_str.parse::<u64>() {
-                        rows.push((amt, name.to_string()));
-                    }
-                }
-            }
-        }
-    }
-    Ok(rows)
 }
 
 #[poise::command(
@@ -215,7 +174,7 @@ pub async fn start(
     dotenv().ok();
     let user = ctx.author().id;
 
-    // Prevent overlapping requests
+    // Restrict the user to one in-progress request at a time
     if IN_FLIGHT.contains_key(&user) {
         ctx.say("❌ You already have a pending request. Please finish it with `/request finish` before starting a new one.")
             .await?;
@@ -228,7 +187,7 @@ pub async fn start(
         product
     ));
 
-    // Send confirmation and capture the message ID
+    // Send confirmation of the request to the user and capture the message ID
     let confirmation: Message = ctx
         .channel_id()
         .send_message(&ctx.http(), confirmation_builder)
@@ -276,7 +235,7 @@ pub async fn update(ctx: Context<'_>) -> Result<(), BotError> {
 
     let embed = build_update_embed(&entry.product, &entry.resources, &inventory);
 
-    // Build and send the reply in one expression:
+    // Send the updated request data back to the user
     let reply = CreateReply::default().embed(embed);
     ctx.send(reply).await?;
 
@@ -306,17 +265,16 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
     // Post in a pre-defined channel specific for request threads
     let target_channel_id: ChannelId = var("REQUESTS_CHANNEL_ID")?.parse::<u64>()?.into();
 
-    // Access the stored request data
     let entry = IN_FLIGHT
         .remove(&user)
         .ok_or("You have no active request. Start one with `/request start`.")?
         .1;
 
     let resources = entry.resources.clone();
-    // Unique per‐request ID
+    // Unique identifier for each request
     let request_id = Uuid::new_v4().to_string();
 
-    // Build and create the public thread from that message
+    // Build and create the public thread from the original message
     let thread_builder = CreateThread::new(format!("{} - submissions", entry.product));
 
     let request_text = resources
@@ -368,7 +326,7 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .doit()
         .await?;
 
-    // Send static welcome message in the thread
+    // Send basic welcome message in the thread with instructions for the user
     // TODO: Allow for adjustments to welcome message or request notes
     let info_builder = CreateMessage::new().content(
         "🛠 Please bring the materials to the Guild base for crafting. \n\n\

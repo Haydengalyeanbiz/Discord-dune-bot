@@ -96,8 +96,6 @@ pub async fn load_request_from_sheets(
             continue;
         }
 
-        // println!("✅ Matched row: {:?}", row);
-
         if product_name.is_empty() {
             product_name = row[1].to_string().clone();
         }
@@ -223,7 +221,7 @@ pub async fn complete_request(
 
     for mut row in sheet_data {
         if row.len() >= 5 && row[0] == request_id {
-            row[4] = Value::String("completed".to_string()); // status column
+            row[4] = Value::String("completed".to_string()); // `status` column
         }
         updated_rows.push(row);
     }
