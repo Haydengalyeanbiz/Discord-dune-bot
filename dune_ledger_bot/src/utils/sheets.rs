@@ -4,12 +4,10 @@ use google_sheets4 as sheets4;
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
 use serde_json::Value;use poise::serenity_prelude as serenity;
 use serenity::{
-    Context, CreateMessage, ComponentInteraction, CreateEmbed
+    CreateMessage, ComponentInteraction, CreateEmbed, ChannelId
 };
 use std::{collections::HashMap, env::var};
 const SERVICE_ACCOUNT_PATH: &str = "secrets/voltaic-bridge-465115-j2-f15defee98d4.json";
-
-struct Data;
 
 pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotError> {
     dotenv().ok();
@@ -58,7 +56,9 @@ pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotErr
     Ok(inventory)
 }
 
-pub async fn load_request_from_sheets(request_id: &str) -> Result<(String, HashMap<String, u64>), BotError> {
+pub async fn load_request_from_sheets(
+    request_id: &str
+) -> Result<(String, HashMap<String, u64>, ChannelId), BotError> {
     dotenvy::dotenv().ok();
     let service_account_key = yup_oauth2::read_service_account_key(SERVICE_ACCOUNT_PATH)
         .await
@@ -79,7 +79,7 @@ pub async fn load_request_from_sheets(request_id: &str) -> Result<(String, HashM
     let hub = Sheets::new(client, authenticator);
 
     let request_sheet_id = var("SPREADSHEET_ID_REQUEST")?;
-    let sheet_range = "Sheet1!A:E";
+    let sheet_range = "Sheet1!A:F";
 
     let result = hub
         .spreadsheets()
@@ -90,14 +90,29 @@ pub async fn load_request_from_sheets(request_id: &str) -> Result<(String, HashM
     let values = result.1.values.unwrap_or_default();
     let mut product_name = String::new();
     let mut resource_map = HashMap::new();
+    let mut thread_id: Option<ChannelId> = None;
 
     for row in values {
         if row.len() < 5 || row[0] != request_id {
             continue;
         }
 
+        println!("✅ Matched row: {:?}", row);
+
         if product_name.is_empty() {
             product_name = row[1].to_string().clone();
+        }
+
+        if thread_id.is_none() {
+            if let Some(raw) = row.get(5) {
+                let cleaned = raw.to_string().replace(|c: char| !c.is_numeric(), "");
+                if let Ok(id_num) = cleaned.parse::<u64>() {
+                    thread_id = Some(ChannelId::from(id_num));
+                    println!("✅ Parsed thread ID: {}", id_num);
+                } else {
+                    println!("❌ Failed to parse thread ID: {:?}", raw);
+                }
+            }
         }
 
         let name_raw = row[2].to_string();
@@ -112,7 +127,9 @@ pub async fn load_request_from_sheets(request_id: &str) -> Result<(String, HashM
         resource_map.insert(normalized, amount);
     }
 
-    Ok((product_name, resource_map))
+    let thread_id = thread_id.ok_or("No thread ID found for request")?;
+    dbg!(&product_name, &thread_id);
+    Ok((product_name, resource_map, thread_id))
 }
 
 pub fn normalize_resource_key(s: &str) -> String {
@@ -153,7 +170,7 @@ pub async fn complete_request(
     let request_range = "Sheet1!A:E";
 
     let mut inventory = load_inventory_from_sheets().await?;
-    let (product_name, request_resources) = load_request_from_sheets(request_id).await?;
+    let (product_name, request_resources, thread_id) = load_request_from_sheets(request_id).await?;
 
 
     let all_satisfied = request_resources.iter().all(|(name, amt)| {
@@ -216,9 +233,10 @@ pub async fn complete_request(
             product_name,
         ))
         .color(0x00ff00);
-
-    comp.channel_id
-    .send_message(&ctx.http, poise::serenity_prelude::CreateMessage::new().embed(embed))
-    .await?;
+    
+    thread_id.send_message(&ctx.http, CreateMessage::new().embed(embed)).await?;
+    // comp.channel_id
+    // .send_message(&ctx.http, poise::serenity_prelude::CreateMessage::new().embed(embed))
+    // .await?;
     Ok(())
 }
