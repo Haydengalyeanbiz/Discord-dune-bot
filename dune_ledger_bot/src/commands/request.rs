@@ -329,13 +329,12 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .title(format!("🔷 CRAFTING REQUEST: {}", entry.product))
         .field("🛠️ Request Materials:", request_text, false);
 
-    let msg_builder = CreateMessage::new()
-        .embed(embed.clone());
+    let msg_builder = CreateMessage::new().embed(embed.clone());
 
     let post: Message = target_channel_id
         .send_message(&ctx.http(), msg_builder)
         .await?;
-    
+
     let thread = target_channel_id
         .create_thread_from_message(&ctx.http(), post.id, thread_builder)
         .await?;
@@ -348,7 +347,7 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
             name.clone().into(),
             req_amt.to_string().into(),
             "in_progress".into(),
-            thread.id.to_string().into()
+            thread.id.to_string().into(),
         ]);
     }
 
@@ -369,7 +368,6 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         .doit()
         .await?;
 
-    
     // Send static welcome message in the thread
     // TODO: Allow for adjustments to welcome message or request notes
     let info_builder = CreateMessage::new().content(
@@ -378,13 +376,14 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
         Let us know if you need help locating any of the resources on the list.",
     );
     let _ = thread.send_message(&ctx.http(), info_builder).await?;
-    
+
     let new_thread_message = CreateMessage::new()
         .button(
             CreateButton::new(format!("request_update:{request_id}"))
                 .label("Update")
                 .style(ButtonStyle::Primary),
-        ).button(
+        )
+        .button(
             CreateButton::new(format!("request_complete:{request_id}"))
                 .label("Complete")
                 .style(ButtonStyle::Success),
@@ -393,5 +392,3 @@ pub async fn finish(ctx: Context<'_>) -> Result<(), BotError> {
     let _ = thread.send_message(&ctx.http(), new_thread_message).await?;
     Ok(())
 }
-
-

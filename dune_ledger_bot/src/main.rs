@@ -1,15 +1,14 @@
 mod commands;
 mod utils;
 
-use utils::sheets::{load_inventory_from_sheets, load_request_from_sheets, complete_request};
+use utils::sheets::{complete_request, load_inventory_from_sheets, load_request_from_sheets};
 
 use commands::request::request;
 use commands::submit::submit;
 use dotenvy::dotenv;
 use poise::builtins::register_in_guild;
 use poise::serenity_prelude as serenity;
-// use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseData};
-use serenity::{CreateMessage, CreateEmbed, GuildId};
+use serenity::{CreateEmbed, CreateMessage, GuildId};
 use std::env::var;
 
 type BotError = Box<dyn std::error::Error + Send + Sync>;
@@ -38,7 +37,7 @@ async fn main() -> Result<(), BotError> {
                 let http = &ctx.http;
                 let guild_id: u64 = var("GUILD_ID")?.parse()?;
                 let guild = GuildId::new(guild_id);
-                // *For de-registering leftover global commands
+                // *For de-registering leftover global commands:
                 // Command::set_global_commands(&ctx.http, Vec::new()).await?;
                 register_in_guild(http, &framework.options().commands, guild).await?;
                 Ok(Data {})
@@ -62,21 +61,20 @@ async fn event_handler(
 ) -> Result<(), BotError> {
     match event {
         // Login event demo
-        serenity::FullEvent::Ready { data_about_bot, .. } => {
-            println!("Logged in as {}", data_about_bot.user.name);
-        }
+        // serenity::FullEvent::Ready { data_about_bot, .. } => {
+        //     println!("Logged in as {}", data_about_bot.user.name);
+        // }
 
-        // **This** is where you catch *all* other interactions,
-        // including button clicks:
+        // *This is where you catch *all* other interactions,
+        // *including button clicks:
         serenity::FullEvent::InteractionCreate { interaction } => {
             if let serenity::Interaction::Component(comp) = interaction.clone() {
-                // dbg!("Comp:", &comp);
                 if comp.data.custom_id.starts_with("request_update") {
                     // ! THIS PREVENTS THE TIMEOUT!!!!
                     comp.defer(&ctx.http).await?;
 
-                    let request_id = comp.data.custom_id["request_update:".len()..].to_string(); 
-                    println!("Request id => {}", request_id);
+                    let request_id = comp.data.custom_id["request_update:".len()..].to_string();
+                    // println!("Request id => {}", request_id);
 
                     let inventory = load_inventory_from_sheets().await?;
                     let result = load_request_from_sheets(&request_id).await;
@@ -91,7 +89,11 @@ async fn event_handler(
                         if stock_amt >= *needed_amt {
                             completed.push(format!("• {} x {}", needed_amt, normalized_name));
                         } else {
-                            remaining.push(format!("• {} x {}", needed_amt - stock_amt, normalized_name));
+                            remaining.push(format!(
+                                "• {} x {}",
+                                needed_amt - stock_amt,
+                                normalized_name
+                            ));
                         }
                     }
 
@@ -120,7 +122,7 @@ async fn event_handler(
 
                     let response = thread_id.send_message(&ctx.http, msg).await;
                     match response {
-                        Ok(_) => println!("✅ Message sent to thread."),
+                        Ok(_) => (),
                         Err(e) => {
                             println!("❌ Error sending to thread: {:?}", e);
                             use std::io::Write;
