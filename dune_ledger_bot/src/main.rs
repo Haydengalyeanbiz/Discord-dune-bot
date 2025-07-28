@@ -9,7 +9,7 @@ use dotenvy::dotenv;
 use poise::builtins::register_in_guild;
 use poise::serenity_prelude as serenity;
 // use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseData};
-use serenity::{CreateMessage, CreateEmbed, GuildId, Message};
+use serenity::{CreateMessage, CreateEmbed, GuildId};
 use std::env::var;
 
 type BotError = Box<dyn std::error::Error + Send + Sync>;
@@ -20,9 +20,6 @@ struct Data {}
 async fn main() -> Result<(), BotError> {
     dotenv().ok();
 
-    // ————————————————————————————————————————————————————————————————
-    // ─── Bot startup ────────────────────────────────────────────────
-    // ————————————————————————————————————————————————————————————————
     let token = var("DISCORD_TOKEN").expect("Expected DISCORD_TOKEN in env");
     let intents = serenity::GatewayIntents::non_privileged();
 
@@ -57,10 +54,6 @@ async fn main() -> Result<(), BotError> {
     Ok(())
 }
 
-// ————————————————————————————————————————————————————————————————
-//  The single async handler for *all* events.
-//  Here you can watch for ComponentInteraction or any other event.
-// ————————————————————————————————————————————————————————————————
 async fn event_handler(
     ctx: &serenity::Context,
     event: &serenity::FullEvent,
@@ -82,10 +75,12 @@ async fn event_handler(
                     // ! THIS PREVENTS THE TIMEOUT!!!!
                     comp.defer(&ctx.http).await?;
 
-                    let request_id = comp.data.custom_id["request_update:".len()..].to_string();
+                    let request_id = comp.data.custom_id["request_update:".len()..].to_string(); 
+                    println!("Request id => {}", request_id);
 
                     let inventory = load_inventory_from_sheets().await?;
-                    let (product_name, request_resources) = load_request_from_sheets(&request_id).await?;
+                    let result = load_request_from_sheets(&request_id).await;
+                    let (product_name, request_resources, thread_id) = result?;
 
                     let mut completed = Vec::new();
                     let mut remaining = Vec::new();
@@ -123,7 +118,15 @@ async fn event_handler(
 
                     let msg = CreateMessage::new().embed(embed);
 
-                    let _ = comp.channel_id.send_message(&ctx.http, msg).await?;
+                    let response = thread_id.send_message(&ctx.http, msg).await;
+                    match response {
+                        Ok(_) => println!("✅ Message sent to thread."),
+                        Err(e) => {
+                            println!("❌ Error sending to thread: {:?}", e);
+                            use std::io::Write;
+                            std::io::stdout().flush().unwrap();
+                        }
+                    }
                 } else if comp.data.custom_id.starts_with("request_complete") {
                     comp.defer(&ctx.http).await?;
                     let request_id = comp.data.custom_id["request_complete:".len()..].to_string();
