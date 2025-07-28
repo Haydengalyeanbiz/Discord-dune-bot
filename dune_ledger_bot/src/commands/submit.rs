@@ -158,7 +158,7 @@ pub async fn submit(
         .await?;
         return Ok(()); // Exit early
     }
-    
+
     for row in ledger_values {
         if let Some(name_val) = row.get(0) {
             if let Some(name) = name_val.as_str() {
@@ -184,14 +184,13 @@ pub async fn submit(
             }
         }
     }
-    
+
     if !found_in_ledger {
         updated_ledger_values.push(vec![
             resource.clone().to_string().to_lowercase().into(),
             amount.into(),
         ]);
     }
-
 
     hub.spreadsheets()
         .values_update(
