@@ -87,7 +87,7 @@ const ALL_RESOURCES: &[&str] = &[
     "TriForged Hydraulic Piston",
 ];
 
-/// Autocomplete handler for the `resource: String` argument.
+// Ensure users only pick from a predetermined set of resources
 async fn resource_autocomplete<'a>(_ctx: Context<'a>, partial: &str) -> Vec<AutocompleteChoice> {
     ALL_RESOURCES
         .iter()
@@ -100,8 +100,9 @@ async fn resource_autocomplete<'a>(_ctx: Context<'a>, partial: &str) -> Vec<Auto
 #[poise::command(slash_command)]
 pub async fn submit(
     ctx: Context<'_>,
-    // #[description = "Resource to submit"]
-    #[autocomplete = "resource_autocomplete"] resource: String,
+    #[description = "Resource to submit"]
+    #[autocomplete = "resource_autocomplete"]
+    resource: String,
     #[description = "Amount to submit"] amount: i32,
 ) -> Result<(), BotError> {
     dotenv().ok();
@@ -129,7 +130,6 @@ pub async fn submit(
     let hub = Sheets::new(client, authenticator);
 
     let inventory_spreadsheet_id = var("SPREADSHEET_ID_INVENTORY")?;
-    // let request_spreadsheet_id = var("SPREADSHEET_ID_REQUEST");
     let range = "Sheet1!A:B";
 
     let ledger_values = hub
@@ -156,9 +156,9 @@ pub async fn submit(
             resource
         ))
         .await?;
-        return Ok(()); // Exit early
+        return Ok(());
     }
-    
+
     for row in ledger_values {
         if let Some(name_val) = row.get(0) {
             if let Some(name) = name_val.as_str() {
@@ -184,14 +184,13 @@ pub async fn submit(
             }
         }
     }
-    
+
     if !found_in_ledger {
         updated_ledger_values.push(vec![
             resource.clone().to_string().to_lowercase().into(),
             amount.into(),
         ]);
     }
-
 
     hub.spreadsheets()
         .values_update(
@@ -225,7 +224,7 @@ pub async fn submit(
 
     let request_spreadsheet_id = var("SPREADSHEET_ID_REQUEST")?;
     let request_range = "Sheet1!A:D";
-    let mut inventory = load_inventory_from_sheets().await?; // refresh after update
+    let mut inventory = load_inventory_from_sheets().await?;
     let request_result = hub
         .spreadsheets()
         .values_get(&request_spreadsheet_id, request_range)
