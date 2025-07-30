@@ -1,11 +1,10 @@
 use crate::BotError;
 use dotenvy::dotenv;
 use google_sheets4 as sheets4;
+use poise::serenity_prelude as serenity;
+use serde_json::Value;
+use serenity::{ChannelId, ComponentInteraction, CreateEmbed, CreateMessage, EditThread};
 use sheets4::{Sheets, api::ValueRange, hyper_rustls, yup_oauth2};
-use serde_json::Value;use poise::serenity_prelude as serenity;
-use serenity::{
-    CreateMessage, ComponentInteraction, CreateEmbed, ChannelId
-};
 use std::{collections::HashMap, env::var};
 const SERVICE_ACCOUNT_PATH: &str = "secrets/voltaic-bridge-465115-j2-f15defee98d4.json";
 
@@ -57,7 +56,7 @@ pub async fn load_inventory_from_sheets() -> Result<HashMap<String, u64>, BotErr
 }
 
 pub async fn load_request_from_sheets(
-    request_id: &str
+    request_id: &str,
 ) -> Result<(String, HashMap<String, u64>, ChannelId), BotError> {
     dotenvy::dotenv().ok();
     let service_account_key = yup_oauth2::read_service_account_key(SERVICE_ACCOUNT_PATH)
@@ -97,8 +96,6 @@ pub async fn load_request_from_sheets(
             continue;
         }
 
-        println!("✅ Matched row: {:?}", row);
-
         if product_name.is_empty() {
             product_name = row[1].to_string().clone();
         }
@@ -108,7 +105,6 @@ pub async fn load_request_from_sheets(
                 let cleaned = raw.to_string().replace(|c: char| !c.is_numeric(), "");
                 if let Ok(id_num) = cleaned.parse::<u64>() {
                     thread_id = Some(ChannelId::from(id_num));
-                    println!("✅ Parsed thread ID: {}", id_num);
                 } else {
                     println!("❌ Failed to parse thread ID: {:?}", raw);
                 }
@@ -128,7 +124,6 @@ pub async fn load_request_from_sheets(
     }
 
     let thread_id = thread_id.ok_or("No thread ID found for request")?;
-    dbg!(&product_name, &thread_id);
     Ok((product_name, resource_map, thread_id))
 }
 
@@ -142,7 +137,7 @@ pub fn normalize_resource_key(s: &str) -> String {
 
 pub async fn complete_request(
     ctx: &serenity::Context,
-    comp: &ComponentInteraction, 
+    comp: &ComponentInteraction,
     request_id: &str,
 ) -> Result<(), BotError> {
     dotenvy::dotenv().ok();
@@ -172,14 +167,18 @@ pub async fn complete_request(
     let mut inventory = load_inventory_from_sheets().await?;
     let (product_name, request_resources, thread_id) = load_request_from_sheets(request_id).await?;
 
-
-    let all_satisfied = request_resources.iter().all(|(name, amt)| {
-        inventory.get(name).copied().unwrap_or(0) >= *amt
-    });
+    let all_satisfied = request_resources
+        .iter()
+        .all(|(name, amt)| inventory.get(name).copied().unwrap_or(0) >= *amt);
 
     if !all_satisfied {
-        comp.channel_id.send_message(&ctx.http, serenity::builder::CreateMessage::new()
-            .content("❌ Not enough resources in inventory to complete this request.")).await?;
+        comp.channel_id
+            .send_message(
+                &ctx.http,
+                serenity::builder::CreateMessage::new()
+                    .content("❌ Not enough resources in inventory to complete this request."),
+            )
+            .await?;
         return Ok(());
     }
 
@@ -190,38 +189,53 @@ pub async fn complete_request(
         }
     }
 
-    let new_inventory_values: Vec<Vec<Value>> = inventory.into_iter()
-    .map(|(name, amt)| vec![Value::String(name), Value::String(amt.to_string())])
-    .collect();
+    let new_inventory_values: Vec<Vec<Value>> = inventory
+        .into_iter()
+        .map(|(name, amt)| vec![Value::String(name), Value::String(amt.to_string())])
+        .collect();
 
     hub.spreadsheets()
-        .values_update(ValueRange {
-            range: Some(ledger_range.to_string()),
-            values: Some(new_inventory_values),
-            ..Default::default()
-        }, &ledger_sheet_id, ledger_range)
+        .values_update(
+            ValueRange {
+                range: Some(ledger_range.to_string()),
+                values: Some(new_inventory_values),
+                ..Default::default()
+            },
+            &ledger_sheet_id,
+            ledger_range,
+        )
         .value_input_option("RAW")
         .doit()
         .await?;
 
-    let sheet_data = hub.spreadsheets().values_get(&request_sheet_id, request_range)
-        .doit().await?.1.values.unwrap_or_default();
+    let sheet_data = hub
+        .spreadsheets()
+        .values_get(&request_sheet_id, request_range)
+        .doit()
+        .await?
+        .1
+        .values
+        .unwrap_or_default();
 
     let mut updated_rows = Vec::new();
 
     for mut row in sheet_data {
         if row.len() >= 5 && row[0] == request_id {
-            row[4] = Value::String("completed".to_string()); // status column
+            row[4] = Value::String("completed".to_string()); // `status` column
         }
         updated_rows.push(row);
     }
 
     hub.spreadsheets()
-        .values_update(ValueRange {
-            range: Some(request_range.to_string()),
-            values: Some(updated_rows),
-            ..Default::default()
-        }, &request_sheet_id, request_range)
+        .values_update(
+            ValueRange {
+                range: Some(request_range.to_string()),
+                values: Some(updated_rows),
+                ..Default::default()
+            },
+            &request_sheet_id,
+            request_range,
+        )
         .value_input_option("RAW")
         .doit()
         .await?;
@@ -233,10 +247,13 @@ pub async fn complete_request(
             product_name,
         ))
         .color(0x00ff00);
-    
-    thread_id.send_message(&ctx.http, CreateMessage::new().embed(embed)).await?;
-    // comp.channel_id
-    // .send_message(&ctx.http, poise::serenity_prelude::CreateMessage::new().embed(embed))
-    // .await?;
+
+    thread_id
+        .send_message(&ctx.http, CreateMessage::new().embed(embed))
+        .await?;
+
+    thread_id
+        .edit_thread(&ctx.http, EditThread::default().locked(true))
+        .await?;
     Ok(())
 }
