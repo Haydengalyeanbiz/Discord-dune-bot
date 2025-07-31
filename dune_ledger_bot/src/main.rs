@@ -1,90 +1,32 @@
 mod commands;
+mod utils;
+
+use utils::sheets::{complete_request, load_inventory_from_sheets, load_request_from_sheets};
+
 use commands::request::request;
 use commands::submit::submit;
-
-use std::env;
 use dotenvy::dotenv;
+use poise::builtins::register_in_guild;
 use poise::serenity_prelude as serenity;
-
-use google_sheets4 as sheets4;
-
-use sheets4::{api::ValueRange, Sheets, hyper_rustls, yup_oauth2};
-// use yup_oauth2::{InstalledFlowAuthenticator, InstalledFlowReturnMethod};
-// use hyper;
-// use hyper_rustls;
-// use hyper_util::client::legacy::Client;
-
-
-struct Data {}
+use serenity::{CreateEmbed, CreateMessage, GuildId};
+use std::env::var;
 
 type BotError = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, BotError>;
-
+struct Data {}
 
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
     dotenv().ok();
 
-    let service_account_key = yup_oauth2::read_service_account_key("secrets/voltaic-bridge-465115-j2-f15defee98d4.json")
-        .await
-        .expect("Can't read credential, an error occurred");
-
-    let authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key)
-        .build()
-        .await
-        .expect("failed to create authenticator");
-    
-    let client = hyper_util::client::legacy::Client::builder(
-        hyper_util::rt::TokioExecutor::new()
-    )
-    .build(
-        hyper_rustls::HttpsConnectorBuilder::new()
-            .with_native_roots()
-            .unwrap()
-            .https_or_http()
-            .enable_http1()
-            .build()
-    );
-
-    let hub = Sheets::new(client, authenticator);
-
-    let req =ValueRange {
-        major_dimension: None,
-        range: None,
-        values: Some(vec![vec![
-            serde_json::value::Value::String("hello".to_string()),
-            serde_json::value::Value::String("world".to_string())
-        ]]),
-    };
-
-    let result = hub.spreadsheets().values_append(req, "1Wzp7fWqcgQNQsv7MxAj5wrPm7JrFstFP0RBSoAje8QI", "A1:D10")
-                .value_input_option("USER_ENTERED")
-                 .doit().await;
-                match result {
-                    Err(e) => match e {
-                        // The Error enum provides details about what exactly happened.
-                        // You can also just use its `Debug`, `Display` or `Error` traits
-                         sheets4::Error::HttpError(_)
-                        |sheets4::Error::Io(_)
-                        |sheets4::Error::MissingAPIKey
-                        |sheets4::Error::MissingToken(_)
-                        |sheets4::Error::Cancelled
-                        |sheets4::Error::UploadSizeLimitExceeded(_, _)
-                        |sheets4::Error::Failure(_)
-                        |sheets4::Error::BadRequest(_)
-                        |sheets4::Error::FieldClash(_)
-                        |sheets4::Error::JsonDecodeError(_, _) => println!("{}", e),
-                    },
-                    Ok(res) => println!("Success: {:?}", res),
-                }
-    
-    // ─── Bot startup ─────────────────────────────────────────
-    let token = env::var("DISCORD_TOKEN")
-        .expect("Expected DISCORD_TOKEN in env");
+    let token = var("DISCORD_TOKEN").expect("Expected DISCORD_TOKEN in env");
     let intents = serenity::GatewayIntents::non_privileged();
 
     let options = poise::FrameworkOptions {
         commands: vec![submit(), request()],
+        event_handler: |ctx, event, framework, data| {
+            Box::pin(event_handler(ctx, event, framework, data))
+        },
         ..Default::default()
     };
 
@@ -93,10 +35,12 @@ async fn main() -> Result<(), BotError> {
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 let http = &ctx.http;
-                let guild_id: u64 = env::var("GUILD_ID")?.parse()?;
-                let guild = serenity::model::id::GuildId::new(guild_id);
-                poise::builtins::register_in_guild(http, &framework.options().commands, guild)
-                    .await?;
+                let guild_id: u64 = var("GUILD_ID")?.parse()?;
+                let guild = GuildId::new(guild_id);
+                // TODO: Remove duplicate slash functions throwing errors
+                // *For de-registering leftover global commands:
+                // Command::set_global_commands(&ctx.http, Vec::new()).await?;
+                register_in_guild(http, &framework.options().commands, guild).await?;
                 Ok(Data {})
             })
         })
@@ -105,11 +49,95 @@ async fn main() -> Result<(), BotError> {
     let mut client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)
         .await?;
-
-    // This `.start().await` will run your bot until it shuts down,
-    // and then return a `Result<(), serenity::Error>`.
     client.start().await?;
 
-    // If we get here, the bot has cleanly shut down:
+    Ok(())
+}
+
+async fn event_handler(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    _framework: poise::FrameworkContext<'_, Data, BotError>,
+    _data: &Data,
+) -> Result<(), BotError> {
+    match event {
+        // Login event demo
+        // serenity::FullEvent::Ready { data_about_bot, .. } => {
+        //     println!("Logged in as {}", data_about_bot.user.name);
+        // }
+
+        // *This is where you catch *all* other interactions,
+        // *including button clicks:
+        serenity::FullEvent::InteractionCreate { interaction } => {
+            if let serenity::Interaction::Component(comp) = interaction.clone() {
+                if comp.data.custom_id.starts_with("request_update") {
+                    // ! THIS PREVENTS THE TIMEOUT!!!!
+                    comp.defer(&ctx.http).await?;
+
+                    let request_id = comp.data.custom_id["request_update:".len()..].to_string();
+
+                    let inventory = load_inventory_from_sheets().await?;
+                    let result = load_request_from_sheets(&request_id).await;
+                    let (product_name, request_resources, thread_id) = result?;
+
+                    let mut completed = Vec::new();
+                    let mut remaining = Vec::new();
+
+                    for (normalized_name, needed_amt) in &request_resources {
+                        let stock_amt = inventory.get(normalized_name).copied().unwrap_or(0);
+
+                        if stock_amt >= *needed_amt {
+                            completed.push(format!("• {} x {}", needed_amt, normalized_name));
+                        } else {
+                            remaining.push(format!(
+                                "• {} x {}",
+                                needed_amt - stock_amt,
+                                normalized_name
+                            ));
+                        }
+                    }
+
+                    let embed = CreateEmbed::new()
+                        .title(format!("🔷 CRAFTING REQUEST: {}", product_name))
+                        .field(
+                            "✅ In Stock:",
+                            if completed.is_empty() {
+                                "Nothing yet...".into()
+                            } else {
+                                completed.join("\n")
+                            },
+                            false,
+                        )
+                        .field(
+                            "🛠 Remaining Materials:",
+                            if remaining.is_empty() {
+                                "All materials collected! 🎉".into()
+                            } else {
+                                remaining.join("\n")
+                            },
+                            false,
+                        );
+
+                    let msg = CreateMessage::new().embed(embed);
+
+                    let response = thread_id.send_message(&ctx.http, msg).await;
+                    match response {
+                        Ok(_) => (),
+                        Err(e) => {
+                            println!("❌ Error sending to thread: {:?}", e);
+                            use std::io::Write;
+                            std::io::stdout().flush().unwrap();
+                        }
+                    }
+                } else if comp.data.custom_id.starts_with("request_complete") {
+                    comp.defer(&ctx.http).await?;
+                    let request_id = comp.data.custom_id["request_complete:".len()..].to_string();
+                    complete_request(&ctx, &comp, &request_id).await?;
+                }
+            }
+        }
+
+        _ => {}
+    }
     Ok(())
 }
