@@ -172,6 +172,7 @@ pub async fn start(
     #[description = "Title for the request"] product: String,
 ) -> Result<(), BotError> {
     dotenv().ok();
+    ctx.defer().await?;
     let user = ctx.author().id;
 
     // Restrict the user to one in-progress request at a time
@@ -181,17 +182,17 @@ pub async fn start(
         return Ok(());
     }
 
-    let confirmation_builder = CreateMessage::new().content(format!(
-        "✅ Request started for **{}**.\n\
-             Now add resources with `/request bulk_add`, then finalize with `/request finish`.",
-        product
-    ));
+    let confirmation = ctx.send(
+    poise::CreateReply::default()
+            .content(format!(
+                "✅ Request started for **{}**.\n\
+                Now add resources with `/request bulk_add`, then finalize with `/request finish`.",
+                product
+            ))
+            .reply(true) // <- make sure this replies in channel
+    ).await?;
 
-    // Send confirmation of the request to the user and capture the message ID
-    let confirmation: Message = ctx
-        .channel_id()
-        .send_message(&ctx.http(), confirmation_builder)
-        .await?;
+    let message_id = confirmation.message().await?.id;
 
     IN_FLIGHT.insert(
         user,
@@ -199,7 +200,7 @@ pub async fn start(
             product: product.clone(),
             resources: Vec::new(),
             _sheet_row_ids: Vec::new(),
-            _message_id: confirmation.id,
+            _message_id: message_id,
         },
     );
 
@@ -211,16 +212,21 @@ pub async fn bulk_add(
     ctx: Context<'_>,
     #[description = "Paste the raw resource list here"] raw_resource_list: String,
 ) -> Result<(), BotError> {
+    ctx.defer().await?;
     let preview: String = parse_resources(&ctx, &raw_resource_list).await?;
     let user = ctx.author().id; //? can we refactor this out? not critical...
     let _entry = IN_FLIGHT
         .get(&user) //? not sure where/how this "entry" is being used
         .ok_or("❌ Could not find in-flight request after parsing.")?;
 
-    ctx.say(format!(
-        "✅ Resources recorded.```{}```Now finalize your request with `/request finish`.",
-        preview
-    ))
+    ctx.send(
+    poise::CreateReply::default()
+            .content(format!(
+                "✅ Resources recorded.\n```{}```\nNow finalize your request with `/request finish`.",
+                preview
+            ))
+            .reply(true)
+    )
     .await?;
     Ok(())
 }
